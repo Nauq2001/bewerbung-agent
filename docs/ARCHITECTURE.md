@@ -11,15 +11,36 @@ của repo hiện tại là nguồn tham khảo domain logic, xem mục 8.
 
 | Hạng mục | Quyết định | Hệ quả kiến trúc |
 |---|---|---|
-| Người dùng | **Chủ sở hữu dùng trước**, sau đó mở cho vài người quen | Giai đoạn 1–2 chạy một user, không cần auth. Auth và tách dữ liệu vào Giai đoạn 4 |
+| Mô hình triển khai | **Local-first: mỗi người tự chạy trên máy mình** | Quyết định quan trọng nhất. Mục 0.2 |
+| Người dùng | Một người cho mỗi lần triển khai | Không cần auth, không cần RLS, không cần multi-tenant |
 | Stack | FastAPI (Python) + React (TypeScript) | Scraper TypeScript gọi qua subprocess, mục 3.4 |
-| Database | **Supabase** (Postgres quản lý) | Dùng luôn auth, storage, pgvector, RLS. Mục 2.1 |
-| Nguồn dữ liệu | **Nguồn cá nhân trước** (LinkedIn, StepStone, Indeed), API công khai bổ sung | Đảo ngược ưu tiên cũ. Ranh giới tier vẫn giữ nguyên, mục 3 |
+| Database | **Postgres local qua Docker Compose**; Supabase là tuỳ chọn | Mục 2.1 |
+| Nguồn dữ liệu | Ba tier theo mức rủi ro, không theo quyền | Mục 3.1 |
 | Nhà cung cấp LLM | **Không khoá vào Anthropic** | Lớp provider trừu tượng, mục 4.0. Cấu hình model là **dữ liệu**, không phải code |
 | Thứ tự dựng | Backend + FastAPI test được trước, rồi frontend | Mục 9 |
 
 **Không nằm trong phạm vi:** đăng ký công khai, thanh toán, ứng dụng mobile, tự động
 nộp hồ sơ vào hệ thống của nhà tuyển dụng.
+
+### 0.2 Mô hình triển khai: local-first
+
+Sản phẩm **không phải một server bạn chạy cho bạn bè dùng**. Mỗi người clone repo và
+chạy trên máy của họ. Hệ quả:
+
+| Hệ quả | Vì sao quan trọng |
+|---|---|
+| Thông tin đăng nhập không bao giờ rời máy họ | Bạn không giữ thứ gì có thể chiếm tài khoản của bạn bè. Không có gì để rò rỉ |
+| Scraper chạy từ IP của chính họ | Đúng nghĩa "dùng cá nhân" như điều khoản của LinkedIn nói tới, chứ không phải một dịch vụ scrape hộ |
+| Không cần auth, RLS, multi-tenant | Giai đoạn 6 của bản trước biến mất. Mỗi database có một người |
+| Nghĩa vụ GDPR gần như bằng không | Bạn không xử lý dữ liệu của ai khác. Mỗi người là *Verantwortlicher* cho dữ liệu của chính mình |
+| Chia sẻ nghĩa là chia sẻ **code**, không phải tài khoản | `docker compose up` là giao diện phân phối |
+
+**Đánh đổi thật:** bạn bè phải cài Docker và biết chạy một lệnh terminal. Đó là cái giá
+để đổi lấy việc không ai phải đưa cookie LinkedIn cho ai.
+
+Chế độ hosted (một server, nhiều người, Supabase Auth + RLS) **không bị loại khỏi thiết
+kế** — schema vẫn có `user_id` ở mọi bảng nên mở rộng được. Nhưng nó là nhánh tuỳ chọn,
+và **tier `account` ở mục 3.1 bị cấm trong chế độ đó**.
 
 ### 0.1 Năm agent
 
@@ -260,36 +281,48 @@ khoảng cách tốn 0 token — giữ nguyên tính chất đó.
 Đây là phần rủi ro cao nhất của sản phẩm và là nơi quyết định "API + scraper cá nhân"
 phải thể hiện thành code.
 
-### 3.1 Hai tier, quyền hạn khác nhau
+### 3.1 Ba tier, phân theo mức rủi ro với tài khoản
+
+Với local-first, tier không còn trả lời câu "ai được phép chạy" — chỉ có một người —
+mà trả lời câu **"nguồn này đặt tài khoản của người dùng vào mức rủi ro nào"**.
 
 ```python
 class SourceTier(StrEnum):
-    PUBLIC   = "public"    # API có điều khoản cho phép dùng
-    PERSONAL = "personal"  # chỉ chủ sở hữu instance được bật
+    PUBLIC   = "public"    # API chính thức hoặc feed mở
+    PERSONAL = "personal"  # đọc trang công khai, không đăng nhập
+    ACCOUNT  = "account"   # điều khiển session đã đăng nhập của người dùng
 ```
 
-| Tier | Nguồn | Ai dùng được | Ghi chú |
+| Tier | Cách lấy dữ liệu | Rủi ro với tài khoản | Ví dụ |
 |---|---|---|---|
-| `personal` | LinkedIn, StepStone, Indeed, và mọi scraper không có điều khoản cho phép | **Chỉ user có cờ `is_owner`** | CLI LinkedIn gốc ghi rõ "Personal use only (LinkedIn ToS)" |
-| `public` | Arbeitnow (feed mở), Adzuna (có key, **kiểm tra điều kiện thương mại**), ATS công khai: Greenhouse, Personio, SmartRecruiters, Workday, Join | Mọi user | Thứ duy nhất mở được cho người quen |
+| `public` | API chính thức, feed mở | Không có | Arbeitnow, Adzuna, ATS công khai (Greenhouse, Personio, SmartRecruiters, Join) |
+| `personal` | Trang công khai, **không đăng nhập**, từ máy người dùng | Thấp — không tài khoản nào tham gia | CLI LinkedIn hiện tại, StepStone, Indeed |
+| `account` | **Session đã đăng nhập của người dùng** | **Cao — tài khoản của họ là cái bị hạn chế** | Việc làm LinkedIn gợi ý riêng |
 
-**Ưu tiên xây tier `personal` trước** vì đó là nơi có tin bạn thật sự cần. Nhưng ranh
-giới tier phải tồn tại **từ dòng code đầu tiên**, không phải thêm vào ở Giai đoạn 4 —
-bởi vì nếu bạn xây một hệ thống coi mọi nguồn như nhau rồi mới tách, thì ngày mời
-người quen vào bạn sẽ chạy scraper LinkedIn hộ họ bằng server của mình.
+Ba điều rút ra:
 
-Thi hành ở tầng query, không phải ở tầng UI:
+1. **Tìm việc trên LinkedIn không cần tài khoản.** CLI trong `.agents/skills/` đọc trang
+   tin công khai và trả về kết quả thật mà không có cookie nào — đã kiểm chứng: 43 kết
+   quả cho vùng Rhein-Main. Phần lớn giá trị của LinkedIn nằm ở tier `personal`, nơi
+   rủi ro thấp.
+2. **Tier `account` mặc định TẮT**, phải bật thủ công, và UI phải nói rõ hậu quả: khi
+   LinkedIn phát hiện truy cập tự động, tài khoản bị hạn chế là tài khoản của chính
+   người dùng — mạng lưới nghề nghiệp thật của họ, đúng lúc họ đang xin việc.
+3. **Tier `account` bị cấm trong chế độ hosted.** Một server điều khiển session của
+   người khác là chuyện khác hẳn với một ứng dụng chạy trên máy họ.
+
+Thi hành ở tầng dựng danh sách nguồn, không phải ở tầng UI hay route:
 
 ```python
-def enabled_sources(user: User) -> list[Source]:
-    q = select(Source).where(Source.enabled)
-    if not user.is_owner:
-        q = q.where(Source.tier == SourceTier.PUBLIC)
-    return session.scalars(q).all()
+def enabled_sources(
+    all_sources: list[JobSource], *, is_owner: bool, allow_account_tier: bool = False, ...
+) -> list[JobSource]:
+    ...
 ```
 
-Lý do đặt ở đây: nếu kiểm tra ở frontend thì một lỗi nhỏ sẽ khiến bạn chạy scraper
-hộ người khác, và đó chính là ranh giới pháp lý bạn muốn giữ.
+Ở local-first `is_owner` luôn `true`; cờ này tồn tại để chặn tier `personal` và
+`account` nếu sau này có ai dựng chế độ hosted. Kiểm tra ở frontend thì một lỗi nhỏ sẽ
+khiến server chạy scraper hộ người khác — đúng ranh giới cần giữ.
 
 ### 3.1b Khả năng làm được từng nguồn — đánh giá thật
 
@@ -318,6 +351,77 @@ Hai quy tắc giữ nguyên từ repo gốc, áp dụng cho mọi connector tier
    trang tin — nó fetch được nhưng trả về nội dung khác, và làm mọi bước sau thất bại.
    Bài học này đã trả giá trong lần chạy thủ công: những tin chỉ lưu được link trang
    danh sách thì hai tháng sau không còn cách nào kiểm tra lại xem còn mở hay không.
+
+### 3.1c Nhập dữ liệu LinkedIn do người dùng tự tải — đường chính thức
+
+Ba tính năng cần tài khoản LinkedIn, và **hai trong ba có đường đi hợp pháp, rủi ro
+bằng không**: LinkedIn cho phép mỗi người tự tải toàn bộ dữ liệu của mình
+(Settings → Data privacy → *Get a copy of your data*), một quyền theo GDPR.
+
+| Tính năng muốn có | Đường rủi ro cao | Đường chính thức |
+|---|---|---|
+| Đọc hồ sơ để dựng CV | Scrape trang profile của họ | **File tự tải về** — người dùng tải lên như một tài liệu nữa |
+| Tìm người giới thiệu qua kết nối | Scrape danh sách connection | **`Connections.csv`** trong file đó, có `company` và `position` |
+| Việc làm LinkedIn gợi ý riêng | Điều khiển session đã đăng nhập | **Không có.** Đây là tính năng duy nhất buộc phải vào tier `account` |
+
+Vì sao đường chính thức tốt hơn chứ không chỉ an toàn hơn:
+
+* **Đầy đủ hơn.** Export trả về toàn bộ connection, không phải những gì scraper lướt
+  được qua phân trang.
+* **Không hỏng.** Không phụ thuộc markup, không bị rate limit, không bị Cloudflare.
+* **Không đặt tài khoản vào rủi ro.** Không có truy cập tự động nào xảy ra.
+* **Người dùng thấy rõ mình đưa gì.** Họ tải file về, mở ra xem được, rồi mới tải lên.
+
+Tích hợp:
+
+```
+Người dùng tải archive .zip từ LinkedIn
+  └─ POST /me/imports/linkedin   (multipart)
+       ├─ giải nén trong bộ nhớ, liệt kê các CSV có trong đó
+       ├─ Connections.csv  → bảng contacts (mục 3.1d)
+       ├─ CSV hồ sơ        → đầu vào thêm cho Agent 1, cạnh CV
+       └─ bỏ qua phần còn lại (messages, reactions, ...) — không cần, không đọc
+```
+
+**Quan trọng khi viết importer: khám phá tên file, đừng hard-code.** Nguồn mình tra
+được xác nhận chắc chắn `Connections.csv` và các cột của nó, nhưng **không xác nhận
+được tên file chứa dữ liệu hồ sơ**, và cấu trúc archive có thể đổi. Importer phải đọc
+danh sách file trong zip, khớp theo header của từng CSV, và báo rõ cái gì nhận ra được
+cái gì không — thay vì vỡ vì một tên file đổi.
+
+Và chỉ đọc những gì cần. Archive có cả tin nhắn riêng; importer không mở chúng.
+
+### 3.1d Bảng contacts
+
+```sql
+CREATE TABLE contacts (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    full_name       TEXT NOT NULL,
+    company         TEXT,
+    position        TEXT,
+    profile_url     TEXT,
+    connected_on    DATE,
+    source          TEXT NOT NULL,   -- 'linkedin_export' | 'manual'
+    imported_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX contacts_company ON contacts (user_id, lower(company));
+```
+
+Việc tìm người giới thiệu trở thành một câu `JOIN`, không phải một lệnh gọi mạng:
+
+```sql
+SELECT c.full_name, c.position, c.profile_url
+FROM contacts c
+JOIN jobs j ON lower(j.company) = lower(c.company)
+WHERE c.user_id = :uid AND j.id = :job_id;
+```
+
+Khớp theo tên công ty nên có sai số — `Bosch` với `Robert Bosch GmbH` là hai chuỗi
+khác nhau. Chuẩn hoá nhẹ (bỏ hậu tố pháp lý `GmbH`, `AG`, `SE`, `& Co. KG`) rồi để
+người dùng tự xác nhận, **không tự động khẳng định** ai làm ở đâu: dữ liệu export là
+ảnh chụp tại thời điểm tải, người ta đổi việc.
 
 ### 3.2 Giao diện connector
 

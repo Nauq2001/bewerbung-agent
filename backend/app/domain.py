@@ -18,10 +18,35 @@ from enum import StrEnum
 
 
 class SourceTier(StrEnum):
-    """Whether a job source may be run on behalf of anyone but the owner."""
+    """How a source gets its data, graded by the risk it puts on the user's account.
+
+    Under the local-first deployment model there is one user per deployment, so
+    this is no longer a permission question. It is a risk question:
+
+      PUBLIC    official API or open feed. No account involved.
+      PERSONAL  reads public pages without logging in, from the user's own
+                machine. Low risk: no account takes part.
+      ACCOUNT   drives the user's logged-in session. High risk - the account
+                that gets restricted is theirs. Off by default, and never
+                available in a hosted deployment.
+    """
 
     PUBLIC = "public"
     PERSONAL = "personal"
+    ACCOUNT = "account"
+
+
+class ContactSource(StrEnum):
+    """Where a contact row came from.
+
+    ``LINKEDIN_EXPORT`` is the archive the user downloads themselves from
+    LinkedIn (Settings -> Data privacy -> Get a copy of your data). Complete,
+    permitted, and it cannot get anyone's account restricted - which is why it
+    beats scraping a connection list rather than merely being safer.
+    """
+
+    LINKEDIN_EXPORT = "linkedin_export"
+    MANUAL = "manual"
 
 
 class HealthStatus(StrEnum):

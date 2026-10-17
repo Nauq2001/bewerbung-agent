@@ -84,35 +84,67 @@ def _check_expressions() -> dict[str, str]:
                     if value is not None:
                         constants[target.id] = value
 
-        for node in ast.walk(tree):
+        # Only upgrade(). downgrade() re-creates the *previous* form of a
+        # widened constraint, and since it sits later in the file a plain
+        # ast.walk over the module would let the rollback definition overwrite
+        # the live one - silently comparing against the schema as it used to be.
+        upgrade_fn = next(
+            (
+                stmt
+                for stmt in tree.body
+                if isinstance(stmt, ast.FunctionDef) and stmt.name == "upgrade"
+            ),
+            None,
+        )
+        assert upgrade_fn is not None, f"{path.name}: no upgrade()"
+
+        for node in ast.walk(upgrade_fn):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name != "CheckConstraint":
+
+            # Two spellings, both in use:
+            #   sa.CheckConstraint(<expr>, name=<name>)        - inline in create_table
+            #   op.create_check_constraint(<name>, <table>, <expr>) - standalone
+            if name == "CheckConstraint":
+                constraint_name = next(
+                    (
+                        kw.value.value
+                        for kw in node.keywords
+                        if kw.arg == "name"
+                        and isinstance(kw.value, ast.Constant)
+                        and isinstance(kw.value.value, str)
+                    ),
+                    None,
+                )
+                expr_node = node.args[0] if node.args else None
+            elif name == "create_check_constraint":
+                if len(node.args) < 3:
+                    continue
+                first = node.args[0]
+                constraint_name = (
+                    first.value
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str)
+                    else None
+                )
+                expr_node = node.args[2]
+            else:
                 continue
-            constraint_name = next(
-                (
-                    kw.value.value
-                    for kw in node.keywords
-                    if kw.arg == "name"
-                    and isinstance(kw.value, ast.Constant)
-                    and isinstance(kw.value.value, str)
-                ),
-                None,
-            )
-            if constraint_name is None or not node.args:
+
+            if constraint_name is None or expr_node is None:
                 continue
-            expression = _resolve_str(node.args[0], constants)
+            expression = _resolve_str(expr_node, constants)
             assert expression is not None, (
                 f"{path.name}: cannot resolve the expression of {constraint_name}. "
                 f"Keep CHECK expressions to literals, '+' concatenation, or an "
                 f"f-string over a module-level constant."
             )
-            assert constraint_name not in found, (
-                f"two CHECK constraints are both named {constraint_name}; "
-                f"constraint names must be unique across migrations"
-            )
+            # Last definition wins. Widening a CHECK means a later revision
+            # drops and re-adds it, so the newest file describes the live
+            # database - which is exactly the workflow this module enforces.
+            # Files are walked in sorted order, and revision ids are prefixed
+            # with a zero-padded sequence, so sort order is apply order.
             found[constraint_name] = expression
 
     return found
@@ -220,11 +252,23 @@ def test_migrations_never_import_app_code():
         )
 
 
-def test_retrieval_is_the_last_revision():
-    """pgvector must not be a day-one dependency.
+def test_contact_source_matches_check():
+    _assert_matches(domain.ContactSource, "contacts_source_check")
 
-    Phase 1 deploys stop at 0003_interview; 0004 is opt-in.
+
+def test_pgvector_is_not_a_day_one_dependency():
+    """No revision before 0004 may require the vector extension.
+
+    A phase-1 deployment runs `alembic upgrade 0003_interview` and must not
+    need pgvector or an embedding provider to get there. Asserting on the
+    *position* of 0004 would break every time a later revision lands; the
+    invariant that actually matters is which revisions mention the extension.
     """
-    text = (VERSIONS / "0004_retrieval.py").read_text(encoding="utf-8")
-    assert 'down_revision = "0003_interview"' in text
-    assert "CREATE EXTENSION IF NOT EXISTS vector" in text
+    for path in sorted(VERSIONS.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if "EXTENSION IF NOT EXISTS vector" not in text:
+            continue
+        assert path.name >= "0004", (
+            f"{path.name} requires pgvector, but phase-1 deployments stop at "
+            f"0003_interview and must not need it"
+        )
