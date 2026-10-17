@@ -1,0 +1,57 @@
+# --- Personal-tier sources: never published -------------------------------
+# The framework and the tier enforcement are public; adapters for boards whose
+# terms do not permit programmatic access are not. Keep the package importable
+# by committing only the README and the package marker.
+backend/app/sources/personal/*
+!backend/app/sources/personal/__init__.py
+!backend/app/sources/personal/README.md
+
+# --- Secrets ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Personal data: CVs, diplomas, generated applications -----------------
+# A public repo must never carry someone's address, phone number or CV.
+storage/
+uploads/
+applications/
+*.pdf
+*.docx
+!docs/**/*.pdf
+
+# --- LaTeX build artifacts ------------------------------------------------
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# --- Node / frontend -------------------------------------------------------
+node_modules/
+frontend/dist/
+.vite/
+
+# --- Editor / OS -----------------------------------------------------------
+.DS_Store
+.vscode/
+.idea/
+
+# --- Claude Code -----------------------------------------------------------
+.claude/settings.local.json
+.claude/projects/
