@@ -18,31 +18,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
+# Vocabularies live in app.domain: they appear in database CHECK constraints
+# too, and two definitions of the same string set is the drift that
+# tests/test_schema_vocabularies.py exists to prevent. Re-exported here so
+# callers of this module keep their imports.
+from app.domain import ContractType, HealthStatus, SourceTier
 
-class SourceTier(StrEnum):
-    PUBLIC = "public"
-    PERSONAL = "personal"
+__all__ = [
+    "ContractType",
+    "HealthStatus",
+    "JobSource",
+    "RawJob",
+    "SearchQuery",
+    "SourceHealth",
+    "SourceTier",
+    "assess_health",
+    "enabled_sources",
+]
 
-
-class HealthStatus(StrEnum):
-    HEALTHY = "healthy"
-    # Parser half-works: exit 0, but fields are null/garbled. The failure mode
-    # that silently poisons the job table, so it is a status of its own.
-    DEGRADED = "degraded"
-    BROKEN = "broken"
-    # Rate limiting is never evidence of breakage. Back off, do not re-probe.
-    RATE_LIMITED = "rate_limited"
-    UNKNOWN = "unknown"
-
-
-class ContractType(StrEnum):
-    INTERNSHIP = "internship"
-    WORKING_STUDENT = "working_student"
-    BOTH = "both"
-    OTHER = "other"
+# A note the enums no longer carry, worth keeping where the health logic is:
+# DEGRADED means the parser half-works - exit 0, fields null or garbled - which
+# is the failure mode that silently poisons the job table. RATE_LIMITED is
+# never evidence of breakage; back off rather than re-probing.
 
 
 @dataclass(slots=True)
