@@ -82,10 +82,30 @@ builds a runnable source list. Not in a route, not in the UI.
 
 ## Using a different LLM
 
-Write an adapter satisfying `LLMProvider` in
+Two adapters ship: Anthropic and OpenAI. The OpenAI one also covers any
+OpenAI-compatible endpoint (Ollama, Together, Groq, vLLM) through `base_url`.
+
+To run everything on OpenAI:
+
+```bash
+export OPENAI_API_KEY=sk-...
+psql "$DATABASE_URL" -c "UPDATE agent_configs SET provider='openai', model='gpt-5.5'"
+```
+
+That is the whole switch - model choice is a table row, not a constant.
+
+What changes when you do: OpenAI declares only `STRUCTURED_OUTPUT` here, so
+prompt caching and batching are unavailable (**the bill goes up**, the
+features do not disappear), and PDFs are extracted locally with `pypdf`
+instead of being read by the model (**CV parsing gets less accurate** on
+multi-column layouts). Agent 5's company research needs a web-search
+capability this adapter does not implement yet.
+
+To add a third provider: write an adapter satisfying `LLMProvider` in
 [`backend/app/llm/base.py`](backend/app/llm/base.py), declare which
-`Capability` values it supports, and point the relevant `agent_configs` row at
-it. Capabilities a provider lacks are emulated in
+`Capability` values it supports, register it in
+[`factory.py`](backend/app/llm/factory.py), and point the relevant
+`agent_configs` row at it. Capabilities a provider lacks are emulated in
 [`degrade.py`](backend/app/llm/degrade.py) — no structured output means
 schema-in-prompt plus validation; no PDF input means local text extraction.
 The feature set does not shrink, the bill and sometimes the accuracy change.
